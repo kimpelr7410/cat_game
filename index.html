@@ -1,0 +1,512 @@
+
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>GLASSES - DON'T GET CAUGHT</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#10141a;color:#fff;font-family:Arial;overflow:hidden}
+#game{position:relative;width:100vw;height:100dvh;background:#222;overflow:hidden}
+canvas{width:100%;height:100%;display:block}
+#hud{position:absolute;top:12px;left:12px;right:12px;pointer-events:none;text-shadow:0 2px 5px #000}
+.row{display:flex;justify-content:space-between;font-size:14px;font-weight:bold}
+.bar{height:9px;background:#333;margin-top:5px;border-radius:8px;overflow:hidden}
+.fill{height:100%;transition:width .1s}
+#progress{background:#42f6a1}
+#glass{position:absolute;inset:0;display:none;pointer-events:none}
+#glass.on{display:block}
+#code{position:absolute;top:20%;left:50%;transform:translateX(-50%);width:min(85%,450px);background:#001b12dd;border:1px solid #37ff91;border-radius:10px;padding:15px;color:#62ffae;font:13px monospace;box-shadow:0 0 20px #00ff5544}
+#code strong{font-size:24px;display:block;margin:12px 0}
+#alert{position:absolute;top:47%;width:100%;text-align:center;font-size:25px;font-weight:900;color:#ff3838;text-shadow:0 0 12px red;pointer-events:none}
+#alert.warning{color:#ffd43b;text-shadow:0 0 12px #ffb700;animation:warningPulse .35s ease-in-out infinite alternate}
+#game.slow-motion canvas{filter:saturate(.55) hue-rotate(14deg);transition:filter .25s}
+#game.slow-motion #alert.warning{color:#b4edff;text-shadow:0 0 18px #47c9ff;animation-duration:.8s}
+@keyframes warningPulse{to{opacity:.55}}
+#buttons{position:absolute;bottom:20px;width:100%;display:flex;justify-content:center;gap:8px;padding:0 12px}
+button{padding:17px 24px;border:0;border-radius:12px;font-size:17px;font-weight:bold;cursor:pointer}
+#toggle,#skill{flex:1;max-width:220px;min-width:0;padding:15px 8px;font-size:15px}
+#toggle{background:#20b875;color:#fff}
+#toggle.active{background:#dc3535}
+#skill{background:#366bd1;color:#fff}
+#skill:disabled{opacity:.55;cursor:not-allowed}
+#skill.active{background:#ffd43b;color:#222}
+#overlay{position:absolute;inset:0;background:#000a;display:flex;align-items:center;justify-content:center}
+#box{background:#17202a;border:1px solid #77818d;border-radius:15px;width:min(88%,420px);padding:24px;text-align:center}
+#box p{color:#ccc;line-height:1.7;font-size:14px}
+.hide{display:none!important}
+.danger{color:#ff4444}
+</style>
+</head>
+<body>
+<div id="game">
+<canvas id="scene"></canvas>
+
+<div id="hud">
+ <div class="row">
+  <span>QUESTION <span id="q">1</span> / 45</span>
+  <span>TIME <span id="timer">03:00</span></span>
+ </div>
+ <div style="margin-top:12px;font-size:13px;font-weight:bold">
+  ANSWER <span id="answer">0</span>%
+ </div>
+ <div class="bar"><div id="progress" class="fill" style="width:0%"></div></div>
+ <div class="row" style="margin-top:9px">
+  <span id="teacherStatus">감독관: 뒤돌아 있음</span>
+  <span id="record">0 / 45</span>
+ </div>
+</div>
+
+<div id="glass">
+ <div id="code">
+  <div>SMART GLASSES // ONLINE</div>
+  <strong>AI ANSWER SCANNING</strong>
+  <div>OPTICAL RECOGNITION...</div>
+  <div>EXAM PAPER DETECTED</div>
+  <div>DATABASE CONNECTED</div>
+  <strong id="fake">ANSWER : C</strong>
+  <div>DOWNLOADING... <span id="download">0</span>%</div>
+ </div>
+</div>
+
+<div id="alert"></div>
+
+<div id="buttons">
+ <button id="toggle" disabled>안경 작동하기</button>
+ <button id="skill" disabled>⚡ 브레인 악셀 ×0</button>
+</div>
+
+<div id="overlay">
+ <div id="box">
+  <h1 id="title">DON'T GET CAUGHT</h1>
+  <p id="desc">
+   감독관이 뒤돌아 있을 때 안경을 작동시켜 답을 수집하라.<br>
+   감독관이 돌아보면 즉시 안경을 꺼라.<br><br>
+   후반으로 갈수록 감독관이 더 자주 돌아본다.<br>
+   감독관은 무작위 시간 동안 돌아서 감시하며, 최대 3초간 지속된다.<br>
+   기본 예고는 0.33초 전.<br><br>
+   5문제마다 브레인 악셀 1회 충전. 버튼 또는 엔터로 발동하면<br>
+   5초간 풀이 속도 3배. 활성 중 예고는 3초간 슬로모션과 BGM으로 표시.<br><br>
+   45문제 · 제한시간 3분<br>
+   들키면 즉시 게임 오버.
+  </p>
+  <button id="start">시험 시작</button>
+ </div>
+</div>
+</div>
+
+<script>
+(()=>{
+const canvas=document.getElementById('scene');
+const ctx=canvas.getContext('2d');
+const $=id=>document.getElementById(id);
+
+let W,H;
+let running=false,active=false,ended=false;
+let question=0,answer=0,time=180;
+let teacherFacing=false;
+let turnTimer=2;
+let turnWarning=false;
+let warningTime=0;
+let slowMotionWarning=false;
+let skillCharges=0,skillTime=0,skillActive=false;
+const turnWarningLead=.33;
+const skillDuration=5;
+const slowMotionDuration=3;
+const slowMotionScale=.25;
+let transition=0;
+let flash=0;
+let last=0;
+let audioContext=null;
+let slowMusicGain=null;
+
+function resize(){
+ const d=Math.min(devicePixelRatio||1,2);
+ W=canvas.clientWidth;H=canvas.clientHeight;
+ canvas.width=W*d;canvas.height=H*d;
+ ctx.setTransform(d,0,0,d,0,0);
+}
+window.addEventListener('resize',resize);
+resize();
+
+function rect(x,y,w,h,color){
+ ctx.fillStyle=color;ctx.fillRect(x,y,w,h);
+}
+function poly(points,color){
+ ctx.fillStyle=color;
+ ctx.beginPath();
+ ctx.moveTo(...points[0]);
+ points.slice(1).forEach(p=>ctx.lineTo(...p));
+ ctx.closePath();ctx.fill();
+}
+function line(x1,y1,x2,y2,color,width=1){
+ ctx.strokeStyle=color;ctx.lineWidth=width;
+ ctx.beginPath();ctx.moveTo(x1,y1);ctx.lineTo(x2,y2);ctx.stroke();
+}
+
+function playTurnCue(){
+ if(!audioContext)return;
+ const now=audioContext.currentTime;
+ const oscillator=audioContext.createOscillator();
+ const gain=audioContext.createGain();
+ oscillator.type='sine';
+ oscillator.frequency.setValueAtTime(880,now);
+ gain.gain.setValueAtTime(.08,now);
+ gain.gain.exponentialRampToValueAtTime(.001,now+.12);
+ oscillator.connect(gain);
+ gain.connect(audioContext.destination);
+ oscillator.start(now);
+ oscillator.stop(now+.12);
+}
+
+function startSlowMotionMusic(){
+ if(!audioContext)return;
+ stopSlowMotionMusic();
+ const now=audioContext.currentTime;
+ const master=audioContext.createGain();
+ master.gain.setValueAtTime(.0001,now);
+ master.gain.linearRampToValueAtTime(.6,now+.15);
+ master.connect(audioContext.destination);
+ slowMusicGain=master;
+
+ function note(frequency,type,level,start,duration){
+  const oscillator=audioContext.createOscillator();
+  const gain=audioContext.createGain();
+  oscillator.type=type;
+  oscillator.frequency.setValueAtTime(frequency,start);
+  gain.gain.setValueAtTime(.001,start);
+  gain.gain.linearRampToValueAtTime(level,start+.06);
+  gain.gain.exponentialRampToValueAtTime(.001,start+duration);
+  oscillator.connect(gain);
+  gain.connect(master);
+  oscillator.start(start);
+  oscillator.stop(start+duration);
+ }
+
+ note(110,'sine',.12,now,slowMotionDuration+.1);
+ [220,196,164.81,196,146.83,164.81].forEach((frequency,index)=>{
+  note(frequency,'triangle',.13,now+index*.5,.46);
+ });
+}
+
+function stopSlowMotionMusic(){
+ if(!audioContext||!slowMusicGain)return;
+ const now=audioContext.currentTime;
+ slowMusicGain.gain.cancelScheduledValues(now);
+ slowMusicGain.gain.setTargetAtTime(.0001,now,.05);
+ slowMusicGain=null;
+}
+
+function classroom(){
+ const horizon=H*.43;
+ rect(0,0,W,H,'#a9a69c');
+ poly([[0,0],[W,0],[W*.85,horizon],[W*.15,horizon]],'#c6c3b8');
+ rect(0,horizon,W,H*.35,'#b3aa9b');
+ poly([[0,H*.78],[W,H*.78],[W,H],[0,H]],'#655b50');
+
+ // perspective floor
+ for(let i=0;i<9;i++){
+  const x=W*i/8;
+  line(W*.5,H*.78,x,H,'#857767');
+ }
+ for(let i=0;i<5;i++){
+  let y=H*.8+i*i*H*.008;
+  line(0,y,W,y,'#827565');
+ }
+
+ // board
+ rect(W*.24,horizon*.36,W*.52,H*.20,'#263b38');
+ rect(W*.23,horizon*.33,W*.54,H*.025,'#796448');
+ rect(W*.23,horizon*.57,W*.54,H*.02,'#796448');
+ ctx.fillStyle='#c8d5bd';
+ ctx.font='14px monospace';
+ ctx.fillText('FINAL EXAMINATION',W*.36,horizon*.49);
+
+ // windows
+ for(let i=0;i<3;i++){
+  let x=W*(.025+i*.115);
+  rect(x,horizon*.3,W*.085,H*.19,'#8bb3c0');
+  rect(x+W*.04,horizon*.3,W*.004,H*.19,'#e3e0d5');
+ }
+
+ // door
+ rect(W*.86,horizon*.35,W*.11,horizon*.3,'#59483b');
+
+ // teacher desk
+ rect(W*.38,H*.70,W*.25,H*.035,'#584333');
+ poly([[W*.4,H*.735],[W*.61,H*.735],[W*.59,H*.82],[W*.42,H*.82]],'#493a30');
+
+ // student desks
+ for(let i=0;i<3;i++){
+  let x=W*(.04+i*.34),y=H*.87;
+  rect(x,y,W*.23,H*.025,'#78583d');
+  poly([[x+W*.01,y+H*.025],[x+W*.22,y+H*.025],[x+W*.20,y+H*.10],[x+W*.03,y+H*.10]],'#513d2d');
+  rect(x+W*.025,y+H*.10,W*.014,H*.07,'#342a24');
+  rect(x+W*.19,y+H*.10,W*.014,H*.07,'#342a24');
+ }
+}
+
+function drawTeacher(){
+ const x=W*.5,y=H*.53;
+ const head=H*.075,bw=W*.055,body=H*.19;
+ const turned=teacherFacing;
+
+ // shadow
+ ctx.fillStyle='#0004';
+ ctx.beginPath();ctx.ellipse(x,y+body*.9,bw*1.5,10,0,0,Math.PI*2);ctx.fill();
+
+ // legs
+ rect(x-bw*.65,y+body*.55,bw*.45,body*.5,'#292d35');
+ rect(x+bw*.2,y+body*.55,bw*.45,body*.5,'#292d35');
+
+ // body
+ rect(x-bw,y,bw*2,body*.7,'#354d65');
+ poly([[x-bw*.5,y],[x,y+body*.2],[x+bw*.5,y],[x+bw*.2,y+body*.65],[x-bw*.2,y+body*.65]],'#d8d8cf');
+ poly([[x-bw*.13,y+body*.05],[x+bw*.13,y+body*.05],[x+bw*.1,y+body*.48],[x,y+body*.57],[x-bw*.1,y+body*.48]],'#9e3434');
+
+ // head
+ ctx.fillStyle='#d5a985';
+ ctx.beginPath();
+ ctx.arc(x,y-head*.25,head*.65,0,Math.PI*2);
+ ctx.fill();
+
+ // hair
+ ctx.fillStyle='#29211d';
+ ctx.beginPath();
+ ctx.arc(x,y-head*.45,head*.65,Math.PI,Math.PI*2);
+ ctx.fill();
+ rect(x-head*.65,y-head*.48,head*1.3,head*.18,'#29211d');
+
+ // face when facing player
+ if(turned){
+  ctx.fillStyle='#29221d';
+  ctx.beginPath();ctx.arc(x-head*.22,y-head*.23,head*.065,0,Math.PI*2);ctx.fill();
+  ctx.beginPath();ctx.arc(x+head*.22,y-head*.23,head*.065,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle='#fff';
+  ctx.font='bold 15px Arial';
+  ctx.textAlign='center';
+  ctx.fillText('!',x,y-head*1.1);
+ }else{
+  // back of head, no eyes
+  ctx.fillStyle='#29211d';
+  ctx.beginPath();
+  ctx.arc(x,y-head*.25,head*.55,0,Math.PI*2);
+  ctx.fill();
+ }
+}
+
+function draw(){
+ ctx.clearRect(0,0,W,H);
+ classroom();
+ drawTeacher();
+
+ // first person hands
+ rect(W*.31,H*.96,W*.09,H*.04,'#c19a7c');
+ rect(W*.60,H*.96,W*.09,H*.04,'#c19a7c');
+
+ if(active){
+  ctx.strokeStyle='#4affaa';
+  ctx.lineWidth=1;
+  ctx.beginPath();ctx.arc(W/2,H*.58,13,0,Math.PI*2);ctx.stroke();
+  line(W/2-23,H*.58,W/2-9,H*.58,'#4affaa');
+  line(W/2+9,H*.58,W/2+23,H*.58,'#4affaa');
+  line(W/2,H*.58-23,W/2,H*.58-9,'#4affaa');
+  line(W/2,H*.58+9,W/2,H*.58+23,'#4affaa');
+ }
+
+ if(turnWarning){
+  ctx.fillStyle=slowMotionWarning
+   ?'rgba(30,95,160,.14)'
+   :'rgba(255,196,0,.08)';
+  ctx.fillRect(0,0,W,H);
+ }
+ if(teacherFacing){
+  // warning tint
+  ctx.fillStyle='rgba(255,0,0,.12)';
+  ctx.fillRect(0,0,W,H);
+ }
+ if(flash>0){
+  ctx.fillStyle=`rgba(255,255,255,${flash})`;
+  ctx.fillRect(0,0,W,H);
+ }
+}
+
+function hud(){
+ $('q').textContent=Math.min(question+1,45);
+ $('answer').textContent=Math.floor(answer);
+ $('record').textContent=question+' / 45';
+ $('progress').style.width=answer+'%';
+
+ $('timer').textContent=
+  String(Math.floor(time/60)).padStart(2,'0')+':'+
+  String(Math.floor(time%60)).padStart(2,'0');
+ $('timer').classList.toggle('danger',time<=30);
+
+ $('teacherStatus').textContent=teacherFacing?'🚨 감독관이 보고 있다!':'감독관: 뒤돌아 있음';
+ $('teacherStatus').style.color=teacherFacing?'#ff5555':'#fff';
+
+ $('glass').classList.toggle('on',active);
+ $('download').textContent=Math.floor(answer);
+ $('fake').textContent='ANSWER : '+['C','A','D','B','B','C'][question%6];
+
+ $('alert').textContent=teacherFacing
+  ?'!! 감독관이 돌아봤다 !!'
+  :turnWarning
+   ?slowMotionWarning
+    ?`!! 곧 돌아본다 !! ${Math.ceil(warningTime)}초`
+    :'!! 곧 돌아본다 !!'
+   :'';
+ $('alert').classList.toggle('warning',turnWarning&&!teacherFacing);
+ $('game').classList.toggle('slow-motion',slowMotionWarning);
+ $('toggle').textContent=active?'■ 안경 끄기':'◉ 안경 작동하기';
+ $('toggle').classList.toggle('active',active);
+ $('skill').textContent=skillActive
+  ?`⚡ 브레인 악셀 ${Math.ceil(skillTime)}초`
+  :`⚡ 브레인 악셀 ×${skillCharges}`;
+ $('skill').disabled=!running||skillCharges===0||skillActive;
+ $('skill').classList.toggle('active',skillActive);
+}
+
+function gameover(reason){
+ running=false;active=false;ended=true;
+ if(slowMotionWarning)stopSlowMotionMusic();
+ turnWarning=false;warningTime=0;slowMotionWarning=false;
+ hud();
+ $('overlay').classList.remove('hide');
+ $('title').textContent=reason==='caught'?'🚨 적발!':reason==='time'?'⌛ 시간 초과':'🏆 시험 완료!';
+ $('desc').innerHTML=reason==='caught'
+ ?`감독관이 안경을 사용하는 모습을 목격했다.<br><br>${question}문제 해결. 시험은 무효다.`
+ :reason==='time'
+ ?`3분이 모두 지났다.<br><br>${question}문제 해결. 시간 초과.`
+ :`45문제를 전부 해결했다.<br><br>감독관에게 들키지 않고 시험을 마쳤다.`;
+ $('start').textContent='다시 시작';
+}
+
+function update(dt){
+ if(!running)return;
+ const gameDt=slowMotionWarning?dt*slowMotionScale:dt;
+ time-=gameDt;
+ if(time<=0){
+  time=0;
+  gameover('time');
+  return;
+ }
+
+ const skillMultiplier=skillActive?3:1;
+ if(skillActive){
+  skillTime-=dt;
+  if(skillTime<=0){
+   skillTime=0;
+   skillActive=false;
+  }
+ }
+
+ if(turnWarning){
+  warningTime-=dt;
+  if(warningTime<=0){
+   turnWarning=false;
+   warningTime=0;
+   if(slowMotionWarning)stopSlowMotionMusic();
+   slowMotionWarning=false;
+   teacherFacing=true;
+   const progress=1-time/180;
+   const intervalScale=1-progress*.5;
+   turnTimer=(1.4+Math.random()*1.6)*intervalScale;
+  }
+ }else{
+  const warningLead=skillActive?slowMotionDuration:turnWarningLead;
+  turnTimer-=gameDt;
+  if(!teacherFacing&&turnTimer<=warningLead){
+   turnWarning=true;
+   slowMotionWarning=skillActive;
+   warningTime=slowMotionWarning?slowMotionDuration:turnWarningLead;
+   playTurnCue();
+   if(slowMotionWarning)startSlowMotionMusic();
+  }else if(turnTimer<=0){
+   teacherFacing=false;
+   const progress=1-time/180;
+   const intervalScale=1-progress*.5;
+   turnTimer=(1.5+Math.random()*3.2)*intervalScale;
+  }
+ }
+
+ if(teacherFacing&&active){
+  gameover('caught');
+  return;
+ }
+
+ if(active&&!teacherFacing){
+  answer+=dt*24*skillMultiplier;
+ }
+ answer=Math.min(100,answer);
+
+ if(answer>=100){
+  question++;
+  answer=0;
+  if(question%5===0)skillCharges++;
+  if(question>=45){
+   gameover('win');
+   return;
+  }
+ }
+
+ hud();
+}
+
+function loop(now){
+ const dt=Math.min((now-last)/1000,.05)||0;
+ last=now;
+ update(dt);
+ draw();
+ requestAnimationFrame(loop);
+}
+
+function start(){
+ question=0;answer=0;time=180;
+ teacherFacing=false;turnTimer=2;turnWarning=false;warningTime=0;
+ slowMotionWarning=false;
+ skillCharges=0;skillTime=0;skillActive=false;
+ active=false;running=true;ended=false;
+ if(!audioContext&&window.AudioContext)audioContext=new AudioContext();
+ $('overlay').classList.add('hide');
+ $('toggle').disabled=false;
+ hud();
+}
+
+function toggle(){
+ if(!running||ended)return;
+ active=!active;
+ hud();
+}
+
+function activateSkill(){
+ if(!running||ended||skillActive||skillCharges===0)return;
+ skillCharges--;
+ skillTime=skillDuration;
+ skillActive=true;
+ hud();
+}
+
+$('start').addEventListener('click',start);
+$('toggle').addEventListener('click',toggle);
+$('skill').addEventListener('click',activateSkill);
+
+window.addEventListener('keydown',e=>{
+ if(e.code==='Space'&&running){
+  e.preventDefault();
+  if(!e.repeat)toggle();
+ }
+ if(e.code==='Enter'&&running){
+  e.preventDefault();
+  if(!e.repeat)activateSkill();
+ }
+});
+
+last=performance.now();
+loop(last);
+})();
+</script>
+</body>
+</html>
+
